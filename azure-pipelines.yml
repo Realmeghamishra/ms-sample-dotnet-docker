@@ -1,0 +1,113 @@
+trigger:
+- none
+ 
+pool:
+  vmImage: 'ubuntu-latest'
+ 
+variables:
+  solution: '**/dotnet-docker/samples/aspnetapp/aspnetapp.sln'  # Path to your solution file
+  buildConfiguration: 'Release'  # Build configuration, e.g., Debug or Release
+  outputPath: '$(System.DefaultWorkingDirectory)/publish'  # Output directory for publish artifacts
+  project: '**/dotnet-docker/samples/aspnetapp/aspnetapp/aspnetapp.csproj'
+
+jobs:
+- job: DotNetAppWebAPI
+  timeoutInMinutes: 7
+  displayName: 'Build DotNet App Docker Image and Deploy to AKS and Exposing through LB'
+  
+  steps:
+  - task: SonarCloudPrepare@1
+    inputs:
+      SonarCloud: 'sonar-svc-conn'
+      organization: 'sonarorg1505'
+      scannerMode: 'CLI'
+      configMode: 'manual'
+      cliProjectKey: 'sonarorg1505_dotnet-app'
+      cliSources: '.'
+  - task: SonarCloudAnalyze@1
+    inputs:
+      jdkversion: 'JAVA_HOME_17_X64'
+
+  - task: SonarCloudPublish@1
+    inputs:
+      pollingTimeoutSec: '300'
+
+  - task: UseDotNet@2
+    inputs:
+      packageType: 'sdk'
+
+  - task: DotNetCoreCLI@2
+    displayName: 'Restore NuGet Packages'
+    inputs:
+      command: 'restore'
+      projects: '$(solution)'
+      feedsToUse: 'select'
+
+  - task: DotNetCoreCLI@2
+    displayName: 'Build'
+    inputs:
+      command: 'build'
+      projects: '$(solution)'
+      arguments: '--configuration $(buildConfiguration)'
+
+  - task: DotNetCoreCLI@2
+    displayName: 'Test'
+    inputs:
+      command: 'test'
+      projects: '$(project)'
+      arguments: '--configuration $(buildConfiguration)'
+      publishTestResults: true
+    
+  - task: DotNetCoreCLI@2
+    displayName: 'Publish'
+    inputs:
+      command: 'publish'
+      projects: '$(solution)'
+      arguments: '--configuration $(buildConfiguration) --output $(outputPath)'
+      publishWebProjects: false  # Change to true if your project is a web application
+      zipAfterPublish: false
+
+  - task: PublishBuildArtifacts@1
+    displayName: 'Publish Artifact'
+    inputs:
+      pathtoPublish: '$(outputPath)'
+      artifactName: 'published'
+
+  - task: Bash@3
+    inputs:
+      targetType: 'inline'
+      script: |
+        # Write your commands here
+        
+        echo 'Hello world- net6.0'
+        echo '$(System.DefaultWorkingDirectory)/publish/net6.0'
+        cd $(System.DefaultWorkingDirectory)/publish/net6.0
+        ls
+        echo 'Hello world -s '
+        echo '$(System.DefaultWorkingDirectory)/publish/s'
+        cd $(System.DefaultWorkingDirectory)/publish/s
+        ls
+
+        
+  - task: Docker@2
+    inputs:
+      containerRegistry: 'acr-svc-conn'
+      repository: 'dotnet-app1'
+      command: 'buildAndPush'
+      Dockerfile: 'Dockerfile'
+      tags: |
+        $(Build.BuildId)
+        latest
+
+  - task: KubernetesManifest@1
+    inputs:
+      action: 'deploy'
+      connectionType: 'azureResourceManager'
+      azureSubscriptionConnection: 'Free Trial(20fe54c0-d1b8-4ac1-bbf3-ea330bdef162)'
+      azureResourceGroup: 'aks-acr-rg'
+      kubernetesCluster: 'helloaks0403'
+      useClusterAdmin: true
+      namespace: 'default'
+      manifests: 'deployment.yaml'
+
+    
